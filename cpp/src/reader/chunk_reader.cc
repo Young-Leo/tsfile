@@ -175,7 +175,6 @@ int ChunkReader::get_next_page(TsBlock* ret_tsblock, Filter* oneshoot_filter,
     int ret = E_OK;
     Filter* filter =
         (oneshoot_filter != nullptr ? oneshoot_filter : time_filter_);
-
     if (prev_page_not_finish()) {
         ret = decode_tv_buf_into_tsblock_by_datatype(time_in_, value_in_,
                                                      ret_tsblock, filter, &pa);

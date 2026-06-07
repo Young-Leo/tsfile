@@ -67,6 +67,7 @@ class TsFileSeriesScanIterator {
         read_file_ = read_file;
         time_filter_ = time_filter;
         data_pa_ = &data_pa;
+        timeseries_index_pa_.init(512, common::MOD_TSFILE_READER);
         return common::E_OK;
     }
     int init_prepared(const std::shared_ptr<PreparedSeries>& prepared,

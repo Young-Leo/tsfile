@@ -96,7 +96,12 @@ typedef int mode_t;
 #endif
 
 /* ======== inline ======== */
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(TSFILE_DISABLE_FORCE_INLINE)
+// Some toolchains (e.g. newer GCC) reject always_inline on recursive virtual
+// functions such as And/OrFilter::satisfy. Allow builds to fall back to a
+// plain inline hint without touching call sites.
+#define FORCE_INLINE inline
+#elif defined(__GNUC__) || defined(__clang__)
 #define FORCE_INLINE inline __attribute__((always_inline))
 #elif defined(_MSC_VER)
 #define FORCE_INLINE __forceinline
