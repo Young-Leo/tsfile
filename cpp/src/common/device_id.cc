@@ -103,6 +103,13 @@ std::string StringArrayDeviceID::get_device_name() const {
 }
 
 void StringArrayDeviceID::init_prefix_segments() {
+    // Idempotent: device IDs are cached and reused across queries, so clear
+    // previous prefixes before rebuilding to avoid accumulation and leaks.
+    for (const auto& prefix_segment : prefix_segments_) {
+        delete prefix_segment;
+    }
+    prefix_segments_.clear();
+
 #ifdef ENABLE_ANTLR4
     auto splits = storage::PathNodesGenerator::invokeParser(*segments_[0]);
 #else
@@ -127,6 +134,7 @@ int StringArrayDeviceID::serialize(common::ByteStream& write_stream) {
     }
     return ret;
 }
+
 
 int StringArrayDeviceID::deserialize(common::ByteStream& read_stream) {
     int ret = common::E_OK;

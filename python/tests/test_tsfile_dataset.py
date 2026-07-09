@@ -1494,12 +1494,40 @@ def test_dataset_tree_model_series_access(tmp_path):
         np.testing.assert_array_equal(aligned.timestamps, np.arange(5, dtype=np.int64))
 
 
+def test_tree_reader_handles_stale_path_columns_after_reused_queries(tmp_path):
+    """Reusing a reader must not leak prefix path state across queries.
+
+    Reading one device series then another reuses the cached device id; stale
+    prefix segments used to mismatch the device and return empty data.
+    """
+    path = tmp_path / "tree.tsfile"
+    _write_tree_file(path)
+
+    with TsFileDataFrame(str(path), show_progress=False) as tsdf:
+        # First read establishes query state on the reader.
+        np.testing.assert_array_equal(
+            tsdf["root.ln.wf01.wt01.temperature"][:],
+            np.array([0.5, 1.5, 2.5, 3.5, 4.5]),
+        )
+        # Second read reuses the same reader for another device.
+        np.testing.assert_array_equal(
+            tsdf["root.ln.wf02.wt02.status"][:],
+            np.array([0.0, 2.0, 4.0, 6.0, 8.0]),
+        )
+        # Read back the first series to confirm alternating reads stay stable.
+        np.testing.assert_array_equal(
+            tsdf["root.ln.wf01.wt01.temperature"][:],
+            np.array([0.5, 1.5, 2.5, 3.5, 4.5]),
+        )
+
+
 def test_dataset_tree_model_list_timeseries_metadata(tmp_path):
     path = tmp_path / "tree.tsfile"
     _write_tree_file(path)
 
     with TsFileDataFrame(str(path), show_progress=False) as tsdf:
         meta = tsdf.list_timeseries_metadata()
+
         assert isinstance(meta, pd.DataFrame)
         assert list(meta.columns) == [
             "field",

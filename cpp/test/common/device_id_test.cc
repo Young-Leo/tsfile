@@ -71,4 +71,25 @@ TEST(DeviceIdTest, TabletDeviceId) {
     ASSERT_EQ("test_device0.null.t2.t3",
               tablet.get_device_id(2)->get_device_name());
 }
+
+// Regression: cached device IDs are reused across queries, so
+// split_table_name() must be idempotent and not accumulate prefix segments.
+TEST(DeviceIdTest, SplitTableNameIsIdempotent) {
+    StringArrayDeviceID device_id("root.ln.wf01.wt01");
+
+    const std::vector<std::string> expected = {"root", "ln", "wf01", "wt01"};
+
+    for (int round = 0; round < 3; ++round) {
+        device_id.split_table_name();
+
+        ASSERT_EQ(static_cast<int>(expected.size()),
+                  device_id.get_split_seg_num());
+        for (int i = 0; i < device_id.get_split_seg_num(); ++i) {
+            std::string* seg = device_id.get_split_segname_at(i);
+            ASSERT_NE(nullptr, seg);
+            ASSERT_EQ(expected[static_cast<size_t>(i)], *seg);
+        }
+    }
+}
 }  // namespace storage
+
