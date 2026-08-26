@@ -41,3 +41,25 @@ install(TARGETS tsfile_labview
         LIBRARY DESTINATION ${LIBRARY_OUTPUT_PATH}
         RUNTIME DESTINATION ${LIBRARY_OUTPUT_PATH})
 install(FILES tsfile_labview.h DESTINATION include)
+
+option(BUILD_LABVIEW_WRAPPER_TESTS "Build LabVIEW shim standalone tests"
+       ${BUILD_TEST})
+if (BUILD_LABVIEW_WRAPPER_TESTS)
+    add_executable(tsfile_labview_block_test test_block.c)
+    target_link_libraries(tsfile_labview_block_test PRIVATE tsfile_labview)
+    if (UNIX)
+        target_link_libraries(tsfile_labview_block_test PRIVATE m)
+    endif ()
+    set_target_properties(tsfile_labview_block_test PROPERTIES
+        C_STANDARD 99
+        C_STANDARD_REQUIRED ON
+        RUNTIME_OUTPUT_DIRECTORY ${LIBRARY_OUTPUT_PATH})
+
+    add_executable(tsfile_labview_codec_benchmark benchmark_codec_matrix.c)
+    target_link_libraries(tsfile_labview_codec_benchmark
+                          PRIVATE tsfile_labview tsfile)
+    set_target_properties(tsfile_labview_codec_benchmark PROPERTIES
+        C_STANDARD 99
+        C_STANDARD_REQUIRED ON
+        RUNTIME_OUTPUT_DIRECTORY ${LIBRARY_OUTPUT_PATH})
+endif ()

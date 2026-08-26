@@ -63,13 +63,19 @@ int ReadFile::generation(uint64_t& size, uint64_t& fingerprint) const {
     if (handle_value == -1) {
         return E_FILE_READ_ERR;
     }
-    FILE_BASIC_INFO info;
-    if (!GetFileInformationByHandleEx(reinterpret_cast<HANDLE>(handle_value),
-                                      FileBasicInfo, &info, sizeof(info))) {
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(reinterpret_cast<HANDLE>(handle_value),
+                                    &info)) {
         return E_FILE_READ_ERR;
     }
     static const int64_t WINDOWS_TO_UNIX_100NS = 116444736000000000LL;
-    mtime_ns = (info.LastWriteTime.QuadPart - WINDOWS_TO_UNIX_100NS) * 100;
+    ULARGE_INTEGER last_write_time;
+    last_write_time.LowPart = info.ftLastWriteTime.dwLowDateTime;
+    last_write_time.HighPart = info.ftLastWriteTime.dwHighDateTime;
+    mtime_ns =
+        (static_cast<int64_t>(last_write_time.QuadPart) -
+         WINDOWS_TO_UNIX_100NS) *
+        100;
 #else
     struct stat info;
     if (::fstat(fd_, &info) != 0) {

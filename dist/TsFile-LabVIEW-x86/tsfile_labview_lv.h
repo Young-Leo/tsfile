@@ -1,4 +1,23 @@
 /*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+/*
  * tsfile_labview_lv.h - LabVIEW Import-Wizard friendly header.
  *
  * Same C ABI as tsfile_labview.h, but with EVERY type fully expanded to a
@@ -52,7 +71,16 @@ void lv_tsfile_schema_builder_free(unsigned long long builder);
 int lv_tsfile_writer_open(const char* path, unsigned long long schema_builder,
                           unsigned long long mem_threshold_bytes,
                           unsigned long long* out_writer);
-int lv_tsfile_writer_write(unsigned long long writer, unsigned long long tablet);
+int lv_tsfile_writer_write(unsigned long long writer,
+                           unsigned long long tablet);
+/* ts is I64[nrows]; data is a row-major numeric array with nrows*ncols
+ * elements. Configure both pointers as Array Data Pointer in CLFN. */
+int lv_tsfile_write_block_i32(unsigned long long writer, const long long* ts,
+                              const int* data, int nrows, int ncols);
+int lv_tsfile_write_block_f32(unsigned long long writer, const long long* ts,
+                              const float* data, int nrows, int ncols);
+int lv_tsfile_write_block_f64(unsigned long long writer, const long long* ts,
+                              const double* data, int nrows, int ncols);
 int lv_tsfile_writer_close(unsigned long long writer);
 
 /* ===================== tablet builder ===================== */
@@ -100,5 +128,19 @@ int lv_tsfile_rs_get_bool(unsigned long long rs, unsigned int col);
 int lv_tsfile_rs_get_str(unsigned long long rs, unsigned int col, char* out_buf,
                          int buf_size, int* out_actual_len);
 void lv_tsfile_rs_free(unsigned long long rs);
+
+/* ===================== one-call convenience ===================== */
+/* Create, write, and close a homogeneous DOUBLE TsFile in one call.
+ * ts and data must be configured as Array Data Pointer in CLFN. */
+int lv_tsfile_write_file_f64(
+    const char* tsfile_path, const char* table_name,
+    const char* column_names_newline_separated, const long long* ts,
+    const double* data, int nrows, int ncols);
+
+/* Generate the small mixed-type file used by the write demo. */
+int lv_tsfile_write_demo(const char* tsfile_path, int nrows);
+
+/* Read the first table and write it as CSV. */
+int lv_tsfile_dump_to_csv(const char* tsfile_path, const char* csv_out_path);
 
 #endif /* TSFILE_LABVIEW_LV_H_ */

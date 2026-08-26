@@ -32,6 +32,7 @@ python/tsfile/dataset/__pycache__
 python/tsfile/*so*
 python/tsfile/*dll*
 python/tsfile/*dylib*
+python/tsfile/*.pyd
 python/tsfile/*.h
 python/tsfile/*.cpp
 python/tsfile/**/*.cpp

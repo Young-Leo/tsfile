@@ -20,10 +20,13 @@
 #include "tsfile_labview.h"
 
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -55,6 +58,8 @@ struct SchemaBuilderCtx {
 struct WriterCtx {
     WriteFile wf = nullptr;
     TsFileWriter writer = nullptr;
+    std::vector<std::string> col_names;
+    std::vector<TSDataType> col_types;
 };
 
 struct TabletCtx {
@@ -110,6 +115,82 @@ void* unregister(uint64_t id, Kind kind) {
     return p;
 }
 
+class ScopedTablet {
+   public:
+    explicit ScopedTablet(Tablet tablet) : tablet_(tablet) {}
+    ~ScopedTablet() {
+        if (tablet_ != nullptr) {
+            free_tablet(&tablet_);
+        }
+    }
+
+    Tablet get() const { return tablet_; }
+
+   private:
+    Tablet tablet_;
+};
+
+template <typename T>
+LV_Status write_block(LV_Handle writer, const int64_t* ts, const T* data,
+                      int32_t nrows, int32_t ncols, TSDataType expected_type,
+                      ERRNO (*add_value)(Tablet, uint32_t, uint32_t, T)) {
+    auto* wctx = static_cast<WriterCtx*>(lookup(writer, Kind::kWriter));
+    if (wctx == nullptr || wctx->writer == nullptr || ts == nullptr ||
+        data == nullptr || nrows <= 0 || ncols <= 0 ||
+        static_cast<size_t>(ncols) != wctx->col_names.size() ||
+        wctx->col_names.size() != wctx->col_types.size()) {
+        return E_INVALID_ARG;
+    }
+
+    for (TSDataType type : wctx->col_types) {
+        if (type != expected_type) {
+            return RET_TYPE_NOT_MATCH;
+        }
+    }
+
+    const size_t rows = static_cast<size_t>(nrows);
+    const size_t cols = static_cast<size_t>(ncols);
+    const size_t max_size = std::numeric_limits<size_t>::max();
+    if (rows > max_size / cols || rows * cols > max_size / sizeof(T)) {
+        return E_INVALID_ARG;
+    }
+
+    try {
+        std::vector<char*> names(cols);
+        for (size_t col = 0; col < cols; ++col) {
+            names[col] = const_cast<char*>(wctx->col_names[col].c_str());
+        }
+
+        ScopedTablet tablet(tablet_new(names.data(), wctx->col_types.data(),
+                                       static_cast<uint32_t>(cols),
+                                       static_cast<uint32_t>(rows)));
+        if (tablet.get() == nullptr) {
+            return E_INVALID_ARG;
+        }
+
+        ERRNO err = E_OK;
+        for (uint32_t row = 0; row < static_cast<uint32_t>(rows); ++row) {
+            err = tablet_add_timestamp(tablet.get(), row, ts[row]);
+            if (err != E_OK) {
+                return err;
+            }
+            const size_t row_offset = static_cast<size_t>(row) * cols;
+            for (uint32_t col = 0; col < static_cast<uint32_t>(cols); ++col) {
+                err = add_value(tablet.get(), row, col, data[row_offset + col]);
+                if (err != E_OK) {
+                    return err;
+                }
+            }
+        }
+
+        return tsfile_writer_write(wctx->writer, tablet.get());
+    } catch (const std::bad_alloc&) {
+        return RET_OOM;
+    } catch (...) {
+        return RET_FILE_WRITE_ERR;
+    }
+}
+
 }  // namespace
 
 /* ===================== global configuration ===================== */
@@ -134,8 +215,8 @@ LV_Status lv_tsfile_schema_builder_add_column(LV_Handle builder,
                                               const char* name,
                                               uint8_t data_type,
                                               uint8_t category) {
-    auto* ctx = static_cast<SchemaBuilderCtx*>(
-        lookup(builder, Kind::kSchemaBuilder));
+    auto* ctx =
+        static_cast<SchemaBuilderCtx*>(lookup(builder, Kind::kSchemaBuilder));
     if (ctx == nullptr || name == nullptr) {
         return E_INVALID_ARG;
     }
@@ -195,11 +276,21 @@ LV_Status lv_tsfile_writer_open(const char* path, LV_Handle schema_builder,
         return err != E_OK ? err : E_INVALID_ARG;
     }
 
-    auto* ctx = new WriterCtx();
-    ctx->wf = wf;
-    ctx->writer = writer;
-    *out_writer = register_handle(Kind::kWriter, ctx);
-    return E_OK;
+    WriterCtx* ctx = nullptr;
+    try {
+        ctx = new WriterCtx();
+        ctx->wf = wf;
+        ctx->writer = writer;
+        ctx->col_names = sb->col_names;
+        ctx->col_types = sb->col_types;
+        *out_writer = register_handle(Kind::kWriter, ctx);
+        return E_OK;
+    } catch (...) {
+        delete ctx;
+        tsfile_writer_close(writer);
+        free_write_file(&wf);
+        return RET_OOM;
+    }
 }
 
 LV_Status lv_tsfile_writer_write(LV_Handle writer, LV_Handle tablet) {
@@ -209,6 +300,27 @@ LV_Status lv_tsfile_writer_write(LV_Handle writer, LV_Handle tablet) {
         return E_INVALID_ARG;
     }
     return tsfile_writer_write(wctx->writer, tctx->tablet);
+}
+
+LV_Status lv_tsfile_write_block_i32(LV_Handle writer, const int64_t* ts,
+                                    const int32_t* data, int32_t nrows,
+                                    int32_t ncols) {
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_INT32,
+                       tablet_add_value_by_index_int32_t);
+}
+
+LV_Status lv_tsfile_write_block_f32(LV_Handle writer, const int64_t* ts,
+                                    const float* data, int32_t nrows,
+                                    int32_t ncols) {
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_FLOAT,
+                       tablet_add_value_by_index_float);
+}
+
+LV_Status lv_tsfile_write_block_f64(LV_Handle writer, const int64_t* ts,
+                                    const double* data, int32_t nrows,
+                                    int32_t ncols) {
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_DOUBLE,
+                       tablet_add_value_by_index_double);
 }
 
 LV_Status lv_tsfile_writer_close(LV_Handle writer) {
@@ -274,14 +386,14 @@ LV_Status lv_tsfile_tablet_set_timestamp(LV_Handle tablet, uint32_t row,
     return tablet_add_timestamp(ctx->tablet, row, ts);
 }
 
-#define LV_TABLET_SET_IMPL(suffix, ctype, cwrap)                          \
+#define LV_TABLET_SET_IMPL(suffix, ctype, cwrap)                            \
     LV_Status lv_tsfile_tablet_set_##suffix(LV_Handle tablet, uint32_t row, \
-                                            uint32_t col, ctype v) {       \
+                                            uint32_t col, ctype v) {        \
         auto* ctx = static_cast<TabletCtx*>(lookup(tablet, Kind::kTablet)); \
-        if (ctx == nullptr || ctx->tablet == nullptr) {                   \
-            return E_INVALID_ARG;                                         \
-        }                                                                 \
-        return cwrap(ctx->tablet, row, col, v);                           \
+        if (ctx == nullptr || ctx->tablet == nullptr) {                     \
+            return E_INVALID_ARG;                                           \
+        }                                                                   \
+        return cwrap(ctx->tablet, row, col, v);                             \
     }
 
 LV_TABLET_SET_IMPL(i32, int32_t, tablet_add_value_by_index_int32_t)
@@ -371,6 +483,178 @@ std::vector<std::string> split_lines(const char* s) {
 }
 }  // namespace
 
+LV_Status lv_tsfile_write_file_f64(
+    const char* tsfile_path, const char* table_name,
+    const char* column_names_newline_separated, const int64_t* ts,
+    const double* data, int32_t nrows, int32_t ncols) {
+    if (tsfile_path == nullptr || table_name == nullptr ||
+        column_names_newline_separated == nullptr || ts == nullptr ||
+        data == nullptr || *tsfile_path == '\0' || *table_name == '\0' ||
+        nrows <= 0 || ncols <= 0) {
+        return E_INVALID_ARG;
+    }
+
+    LV_Handle builder = 0;
+    LV_Handle writer = 0;
+    try {
+        const std::vector<std::string> names =
+            split_lines(column_names_newline_separated);
+        if (names.size() != static_cast<size_t>(ncols)) {
+            return E_INVALID_ARG;
+        }
+        for (const std::string& name : names) {
+            if (name.empty()) {
+                return E_INVALID_ARG;
+            }
+        }
+
+        builder = lv_tsfile_schema_builder_new(table_name);
+        if (builder == 0) {
+            return RET_OOM;
+        }
+        for (const std::string& name : names) {
+            const LV_Status add_status = lv_tsfile_schema_builder_add_column(
+                builder, name.c_str(), LV_TYPE_DOUBLE, LV_CAT_FIELD);
+            if (add_status != E_OK) {
+                lv_tsfile_schema_builder_free(builder);
+                return add_status;
+            }
+        }
+
+        LV_Status status =
+            lv_tsfile_writer_open(tsfile_path, builder, 0, &writer);
+        lv_tsfile_schema_builder_free(builder);
+        builder = 0;
+        if (status != E_OK) {
+            return status;
+        }
+
+        status = lv_tsfile_write_block_f64(writer, ts, data, nrows, ncols);
+        const LV_Status close_status = lv_tsfile_writer_close(writer);
+        writer = 0;
+        return status != E_OK ? status : close_status;
+    } catch (const std::bad_alloc&) {
+        if (builder != 0) {
+            lv_tsfile_schema_builder_free(builder);
+        }
+        if (writer != 0) {
+            lv_tsfile_writer_close(writer);
+        }
+        return RET_OOM;
+    } catch (...) {
+        if (builder != 0) {
+            lv_tsfile_schema_builder_free(builder);
+        }
+        if (writer != 0) {
+            lv_tsfile_writer_close(writer);
+        }
+        return RET_FILE_WRITE_ERR;
+    }
+}
+
+LV_Status lv_tsfile_write_demo(const char* tsfile_path, int32_t nrows) {
+    if (tsfile_path == nullptr || *tsfile_path == '\0' || nrows <= 0 ||
+        nrows > INT32_MAX / 10) {
+        return E_INVALID_ARG;
+    }
+
+    LV_Handle builder = 0;
+    LV_Handle writer = 0;
+    LV_Handle tablet = 0;
+    LV_Status status = E_OK;
+
+    try {
+        builder = lv_tsfile_schema_builder_new("demo");
+        if (builder == 0) {
+            status = RET_OOM;
+            goto cleanup;
+        }
+        status = lv_tsfile_schema_builder_add_column(
+            builder, "device", LV_TYPE_STRING, LV_CAT_TAG);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+        status = lv_tsfile_schema_builder_add_column(
+            builder, "temp", LV_TYPE_DOUBLE, LV_CAT_FIELD);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+        status = lv_tsfile_schema_builder_add_column(
+            builder, "cnt", LV_TYPE_INT32, LV_CAT_FIELD);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+        status = lv_tsfile_writer_open(tsfile_path, builder, 0, &writer);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+
+        tablet = lv_tsfile_tablet_new(static_cast<uint32_t>(nrows));
+        if (tablet == 0) {
+            status = RET_OOM;
+            goto cleanup;
+        }
+        status =
+            lv_tsfile_tablet_add_column(tablet, "device", LV_TYPE_STRING);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+        status = lv_tsfile_tablet_add_column(tablet, "temp", LV_TYPE_DOUBLE);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+        status = lv_tsfile_tablet_add_column(tablet, "cnt", LV_TYPE_INT32);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+        status = lv_tsfile_tablet_finalize_columns(tablet);
+        if (status != E_OK) {
+            goto cleanup;
+        }
+
+        for (int32_t row = 0; row < nrows; ++row) {
+            status = lv_tsfile_tablet_set_timestamp(tablet, row, row + 1);
+            if (status != E_OK) {
+                goto cleanup;
+            }
+            status =
+                lv_tsfile_tablet_set_str(tablet, row, 0, "sensorA", 7);
+            if (status != E_OK) {
+                goto cleanup;
+            }
+            status = lv_tsfile_tablet_set_f64(
+                tablet, row, 1, 20.0 + 0.5 * std::sin(row));
+            if (status != E_OK) {
+                goto cleanup;
+            }
+            status = lv_tsfile_tablet_set_i32(tablet, row, 2, row * 10);
+            if (status != E_OK) {
+                goto cleanup;
+            }
+        }
+        status = lv_tsfile_writer_write(writer, tablet);
+    } catch (const std::bad_alloc&) {
+        status = RET_OOM;
+    } catch (...) {
+        status = RET_FILE_WRITE_ERR;
+    }
+
+cleanup:
+    if (tablet != 0) {
+        lv_tsfile_tablet_free(tablet);
+    }
+    if (writer != 0) {
+        const LV_Status close_status = lv_tsfile_writer_close(writer);
+        if (status == E_OK) {
+            status = close_status;
+        }
+    }
+    if (builder != 0) {
+        lv_tsfile_schema_builder_free(builder);
+    }
+    return status;
+}
+
 LV_Status lv_tsfile_query_table(LV_Handle reader, const char* table_name,
                                 const char* columns_newline_separated,
                                 int64_t start_time, int64_t end_time,
@@ -389,9 +673,9 @@ LV_Status lv_tsfile_query_table(LV_Handle reader, const char* table_name,
     }
 
     ERRNO err = E_OK;
-    ResultSet rs = tsfile_query_table(
-        rctx->reader, table_name, col_ptrs.data(),
-        static_cast<uint32_t>(col_ptrs.size()), start_time, end_time, &err);
+    ResultSet rs = tsfile_query_table(rctx->reader, table_name, col_ptrs.data(),
+                                      static_cast<uint32_t>(col_ptrs.size()),
+                                      start_time, end_time, &err);
     if (rs == nullptr || err != E_OK) {
         return err != E_OK ? err : E_INVALID_ARG;
     }
@@ -569,7 +853,8 @@ LV_Status lv_tsfile_dump_to_csv(const char* tsfile_path,
     }
 
     // 2) Fetch the table schema to learn every column name.
-    TableSchema schema = tsfile_reader_get_table_schema(reader, table_name.c_str());
+    TableSchema schema =
+        tsfile_reader_get_table_schema(reader, table_name.c_str());
     std::vector<std::string> cols;
     for (int i = 0; i < schema.column_num; ++i) {
         if (schema.column_schemas != nullptr &&

@@ -21,8 +21,8 @@
  * tsfile_labview.h - LabVIEW-friendly C shim over cpp/src/cwrapper.
  *
  * Design goals (driven by LabVIEW Call Library Function Node limits):
- *   - Every opaque handle is a plain uint64_t (LabVIEW: Unsigned
- *     Pointer-sized Integer). 0 means invalid.
+ *   - Every opaque handle is a plain uint64_t (LabVIEW: Unsigned 64-bit
+ *     Integer / U64, including in 32-bit LabVIEW). 0 means invalid.
  *   - Every fallible call returns int32_t (0 = OK), reusing cwrapper ERRNO.
  *   - No struct with embedded pointers / variable arrays is ever passed.
  *   - No char** arguments: column lists are passed as a single newline
@@ -82,12 +82,25 @@ LV_API LV_Status lv_tsfile_writer_open(const char* path,
                                        uint64_t mem_threshold_bytes,
                                        LV_Handle* out_writer);
 LV_API LV_Status lv_tsfile_writer_write(LV_Handle writer, LV_Handle tablet);
+/* Write one homogeneous numeric block in a single host-to-DLL call.
+ * ts has nrows elements. data has nrows*ncols elements in row-major order:
+ * data[row*ncols + col]. ncols and the value type must exactly match the
+ * schema used to open writer. The temporary tablet is owned by this call. */
+LV_API LV_Status lv_tsfile_write_block_i32(LV_Handle writer, const int64_t* ts,
+                                           const int32_t* data, int32_t nrows,
+                                           int32_t ncols);
+LV_API LV_Status lv_tsfile_write_block_f32(LV_Handle writer, const int64_t* ts,
+                                           const float* data, int32_t nrows,
+                                           int32_t ncols);
+LV_API LV_Status lv_tsfile_write_block_f64(LV_Handle writer, const int64_t* ts,
+                                           const double* data, int32_t nrows,
+                                           int32_t ncols);
 LV_API LV_Status lv_tsfile_writer_close(LV_Handle writer);
 
 /* ===================== tablet builder ===================== */
 LV_API LV_Handle lv_tsfile_tablet_new(uint32_t max_rows);
-LV_API LV_Status lv_tsfile_tablet_add_column(LV_Handle tablet,
-                                             const char* name, uint8_t dtype);
+LV_API LV_Status lv_tsfile_tablet_add_column(LV_Handle tablet, const char* name,
+                                             uint8_t dtype);
 /* Must be called once after all columns are added and before set_* calls. */
 LV_API LV_Status lv_tsfile_tablet_finalize_columns(LV_Handle tablet);
 
@@ -109,8 +122,7 @@ LV_API LV_Status lv_tsfile_tablet_set_str(LV_Handle tablet, uint32_t row,
 LV_API void lv_tsfile_tablet_free(LV_Handle tablet);
 
 /* ===================== reader ===================== */
-LV_API LV_Status lv_tsfile_reader_open(const char* path,
-                                       LV_Handle* out_reader);
+LV_API LV_Status lv_tsfile_reader_open(const char* path, LV_Handle* out_reader);
 LV_API LV_Status lv_tsfile_reader_close(LV_Handle reader);
 
 /* columns: newline ('\n') separated list, e.g. "id1\ns1\ns2". */
@@ -134,10 +146,25 @@ LV_API int32_t lv_tsfile_rs_get_bool(LV_Handle rs, uint32_t col);
 /* String output into a caller-preallocated buffer. out_actual_len receives the
  * full string length (excluding NUL), even if it exceeds buf_size. */
 LV_API LV_Status lv_tsfile_rs_get_str(LV_Handle rs, uint32_t col, char* out_buf,
-                                      int32_t buf_size, int32_t* out_actual_len);
+                                      int32_t buf_size,
+                                      int32_t* out_actual_len);
 LV_API void lv_tsfile_rs_free(LV_Handle rs);
 
 /* ===================== one-call convenience ===================== */
+/* Create, write, and close a homogeneous DOUBLE TsFile in one call.
+ * column_names_newline_separated contains exactly ncols non-empty names.
+ * ts has nrows elements and data has nrows*ncols row-major elements.
+ * This is convenient for a one-shot LabVIEW CLFN; use writer_open +
+ * write_block_f64 + writer_close for a continuous acquisition stream. */
+LV_API LV_Status lv_tsfile_write_file_f64(
+    const char* tsfile_path, const char* table_name,
+    const char* column_names_newline_separated, const int64_t* ts,
+    const double* data, int32_t nrows, int32_t ncols);
+
+/* Generate the small mixed-type file used by the bundled LabVIEW write demo.
+ * Schema: device:STRING tag, temp:DOUBLE field, cnt:INT32 field. */
+LV_API LV_Status lv_tsfile_write_demo(const char* tsfile_path, int32_t nrows);
+
 /* All-in-one: open the .tsfile, auto-discover the first table and all of its
  * columns, read every row, and write the result as a comma-separated CSV file
  * (first row = column names; column 0 = timestamp). Returns 0 on success.
