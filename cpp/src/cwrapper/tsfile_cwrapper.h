@@ -523,9 +523,6 @@ ERRNO tsfile_writer_add_tsfile_property(TsFileWriter writer, const char* key,
                                         uint32_t key_len, const uint8_t* value,
                                         uint32_t value_len);
 
-/** Flushes buffered table data without closing the writer. */
-ERRNO tsfile_writer_flush(TsFileWriter writer);
-
 /**
  * @brief Releases resources associated with a TsFileReader.
  *
@@ -632,6 +629,19 @@ ERRNO tablet_set_timestamps(Tablet tablet, const int64_t* timestamps,
 ERRNO tablet_set_column_values(Tablet tablet, uint32_t column_index,
                                const void* values, const uint8_t* null_bitmap,
                                uint32_t count);
+
+/**
+ * @brief Bulk-copies a homogeneous fixed-width row-major matrix into a Tablet.
+ *
+ * @param values [in] row_count*column_count values in interleaved row-major
+ * order. Supported types are INT32, FLOAT, and DOUBLE.
+ * @param data_type [in] Type shared by every Tablet column and input value.
+ * @param row_count [in] Number of rows to copy.
+ * @param column_count [in] Number of columns; must match the Tablet schema.
+ */
+ERRNO tablet_set_interleaved_values(Tablet tablet, const void* values,
+                                    TSDataType data_type, uint32_t row_count,
+                                    uint32_t column_count);
 
 /**
  * @brief Assigns timestamp to a row in the Tablet.

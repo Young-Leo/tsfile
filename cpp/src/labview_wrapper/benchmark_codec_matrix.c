@@ -45,6 +45,7 @@
 
 typedef enum BenchmarkMode {
     MODE_WRAPPER,
+    MODE_WRAPPER_COLUMN_MAJOR,
     MODE_CORE,
 } BenchmarkMode;
 
@@ -124,11 +125,19 @@ static int parse_mode(const char* text, BenchmarkMode* mode) {
         *mode = MODE_WRAPPER;
         return 1;
     }
+    if (strcmp(text, "wrapper-column-major") == 0) {
+        *mode = MODE_WRAPPER_COLUMN_MAJOR;
+        return 1;
+    }
     if (strcmp(text, "core") == 0) {
         *mode = MODE_CORE;
         return 1;
     }
     return 0;
+}
+
+static int is_wrapper_mode(BenchmarkMode mode) {
+    return mode == MODE_WRAPPER || mode == MODE_WRAPPER_COLUMN_MAJOR;
 }
 
 static int parse_encoding(const char* text, uint8_t* encoding) {
@@ -300,7 +309,8 @@ int main(int argc, char** argv) {
     memset(&phases, 0, sizeof(phases));
     if (argc != 11) {
         fprintf(stderr,
-                "usage: %s <wrapper|core> <output.tsfile> "
+                "usage: %s <wrapper|wrapper-column-major|core> "
+                "<output.tsfile> "
                 "<total-value-bytes> <block-value-bytes> <ncols> "
                 "<raw-block.bin> <value-encoding> <value-compression> "
                 "<time-encoding> <time-compression>\n",
@@ -356,6 +366,24 @@ int main(int argc, char** argv) {
     fclose(source);
     source = NULL;
 
+    if (mode == MODE_WRAPPER_COLUMN_MAJOR) {
+        double* column_major_values =
+            (double*)malloc((size_t)block_value_bytes);
+        if (column_major_values == NULL) {
+            fprintf(stderr, "column-major source allocation failed\n");
+            goto cleanup;
+        }
+        for (int32_t row = 0; row < rows_per_block; ++row) {
+            for (int32_t col = 0; col < ncols; ++col) {
+                column_major_values[(size_t)col * (size_t)rows_per_block +
+                                    (size_t)row] =
+                    source_values[(size_t)row * (size_t)ncols + (size_t)col];
+            }
+        }
+        free(source_values);
+        source_values = column_major_values;
+    }
+
     column_names = make_column_names(ncols);
     column_types = (TSDataType*)malloc((size_t)ncols * sizeof(TSDataType));
     if (column_names == NULL || column_types == NULL) {
@@ -381,7 +409,7 @@ int main(int argc, char** argv) {
     full_started = monotonic_seconds();
     {
         const double started = monotonic_seconds();
-        if (mode == MODE_WRAPPER) {
+        if (is_wrapper_mode(mode)) {
             wrapper_writer = wrapper_open(output_path, column_names, ncols);
             if (wrapper_writer == 0) {
                 goto cleanup;
@@ -421,12 +449,19 @@ int main(int argc, char** argv) {
         }
         phases.prepare_seconds += monotonic_seconds() - started;
 
-        if (mode == MODE_WRAPPER) {
+        if (is_wrapper_mode(mode)) {
             started = monotonic_seconds();
-            if (!check_status(
-                    lv_tsfile_write_block_f64(wrapper_writer, timestamps,
-                                              values, rows_per_block, ncols),
-                    "lv_tsfile_write_block_f64")) {
+            const int write_status =
+                mode == MODE_WRAPPER_COLUMN_MAJOR
+                    ? lv_tsfile_write_block_f64_column_major(
+                          wrapper_writer, timestamps, values, rows_per_block,
+                          ncols)
+                    : lv_tsfile_write_block_f64(wrapper_writer, timestamps,
+                                                values, rows_per_block, ncols);
+            if (!check_status(write_status,
+                              mode == MODE_WRAPPER_COLUMN_MAJOR
+                                  ? "lv_tsfile_write_block_f64_column_major"
+                                  : "lv_tsfile_write_block_f64")) {
                 free(timestamps);
                 free(values);
                 goto cleanup;
@@ -434,14 +469,15 @@ int main(int argc, char** argv) {
             phases.wrapper_block_seconds += monotonic_seconds() - started;
         } else {
             Tablet tablet;
+            ERRNO tablet_err = 0;
             started = monotonic_seconds();
             tablet = tablet_new(column_names, column_types, (uint32_t)ncols,
-                                (uint32_t)rows_per_block);
+                                (uint32_t)rows_per_block, &tablet_err);
             phases.tablet_new_seconds += monotonic_seconds() - started;
             if (tablet == NULL) {
                 free(timestamps);
                 free(values);
-                fprintf(stderr, "tablet_new failed\n");
+                fprintf(stderr, "tablet_new failed: %d\n", tablet_err);
                 goto cleanup;
             }
 
@@ -496,7 +532,7 @@ int main(int argc, char** argv) {
 
     {
         const double started = monotonic_seconds();
-        if (mode == MODE_WRAPPER) {
+        if (is_wrapper_mode(mode)) {
             if (!check_status(lv_tsfile_writer_flush(wrapper_writer),
                               "lv_tsfile_writer_flush")) {
                 goto cleanup;
@@ -510,7 +546,7 @@ int main(int argc, char** argv) {
 
     {
         const double started = monotonic_seconds();
-        if (mode == MODE_WRAPPER) {
+        if (is_wrapper_mode(mode)) {
             if (!check_status(lv_tsfile_writer_close(wrapper_writer),
                               "lv_tsfile_writer_close")) {
                 wrapper_writer = 0;
@@ -535,7 +571,9 @@ int main(int argc, char** argv) {
         goto cleanup;
     }
 
-    printf("MODE=%s\n", mode == MODE_WRAPPER ? "wrapper" : "core");
+    printf("MODE=%s\n", mode == MODE_WRAPPER_COLUMN_MAJOR
+                            ? "wrapper-column-major"
+                            : (mode == MODE_WRAPPER ? "wrapper" : "core"));
     printf("VALUE_ENCODING=%s\n", argv[7]);
     printf("VALUE_COMPRESSION=%s\n", argv[8]);
     printf("TIME_ENCODING=%s\n", argv[9]);

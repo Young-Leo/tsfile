@@ -214,6 +214,27 @@ static int test_f64(void) {
     return 0;
 }
 
+static int test_f64_column_major(void) {
+    static const char* path = "lv_block_f64_column_major.tsfile";
+    const int64_t ts[NROWS] = {10, 11, 12, 13};
+    const double values_column_major[NROWS * NCOLS] = {
+        1.5, 11.5, 21.5, 31.5, 2.5, 12.5, 22.5, 32.5, 3.5, 13.5, 23.5, 33.5};
+    const double expected_row_major[NROWS * NCOLS] = {
+        1.5, 2.5, 3.5, 11.5, 12.5, 13.5, 21.5, 22.5, 23.5, 31.5, 32.5, 33.5};
+    LV_Handle writer = 0;
+    if (open_writer(path, "block_f64", LV_TYPE_DOUBLE, &writer) != 0) {
+        return 1;
+    }
+    CHECK_OK(lv_tsfile_write_block_f64_column_major(
+        writer, ts, values_column_major, NROWS, NCOLS));
+    CHECK_OK(lv_tsfile_writer_close(writer));
+    if (verify_f64(path, expected_row_major) != 0) {
+        return 1;
+    }
+    remove(path);
+    return 0;
+}
+
 static int test_f64_reuse_and_growth(void) {
     static const char* path = "lv_block_f64_reuse.tsfile";
     static const char* columns = "c0\nc1\nc2\nc3\nc4\nc5\nc6\nc7\nc8";
@@ -364,6 +385,10 @@ int main(void) {
     }
     fprintf(stderr, "RUN test_f64\n");
     if (test_f64() != 0) {
+        return 1;
+    }
+    fprintf(stderr, "RUN test_f64_column_major\n");
+    if (test_f64_column_major() != 0) {
         return 1;
     }
     fprintf(stderr, "RUN test_f64_reuse_and_growth\n");

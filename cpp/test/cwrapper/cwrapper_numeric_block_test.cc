@@ -47,7 +47,7 @@ class CWrapperNumericBlockTest : public testing::Test {
         ASSERT_NE(nullptr, writer);
         ASSERT_EQ(common::E_OK, err);
 
-        Tablet tablet = tablet_new(names, types, 2, 7);
+        Tablet tablet = tablet_new(names, types, 2, 7, &err);
         ASSERT_NE(nullptr, tablet);
         const int64_t timestamps[] = {10, 20, 30, 40, 50, 60, 70};
         const double values_a[] = {1, 2, 3, 4, 5, 6, 7};

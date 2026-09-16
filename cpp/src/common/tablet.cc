@@ -257,6 +257,72 @@ int Tablet::set_column_values(uint32_t schema_index, const void* data,
     return E_OK;
 }
 
+int Tablet::set_interleaved_values(const void* data, TSDataType data_type,
+                                   uint32_t row_count, uint32_t column_count) {
+    if (err_code_ != E_OK) return err_code_;
+    if (UNLIKELY(column_count == 0 || column_count != schema_vec_->size())) {
+        return E_INVALID_ARG;
+    }
+    if (UNLIKELY(row_count > static_cast<uint32_t>(max_row_num_))) {
+        return E_OUT_OF_RANGE;
+    }
+    if (UNLIKELY(data == nullptr && row_count != 0)) {
+        return E_INVALID_ARG;
+    }
+    if (UNLIKELY(row_count != 0 && static_cast<size_t>(column_count) >
+                                       std::numeric_limits<size_t>::max() /
+                                           static_cast<size_t>(row_count))) {
+        return E_OUT_OF_RANGE;
+    }
+
+    for (uint32_t col = 0; col < column_count; ++col) {
+        if (schema_vec_->at(col).data_type_ != data_type) {
+            return E_TYPE_NOT_MATCH;
+        }
+    }
+
+    switch (data_type) {
+        case INT32: {
+            const int32_t* source = static_cast<const int32_t*>(data);
+            for (uint32_t row = 0; row < row_count; ++row) {
+                const size_t offset = static_cast<size_t>(row) * column_count;
+                for (uint32_t col = 0; col < column_count; ++col) {
+                    value_matrix_[col].int32_data[row] = source[offset + col];
+                }
+            }
+            break;
+        }
+        case FLOAT: {
+            const float* source = static_cast<const float*>(data);
+            for (uint32_t row = 0; row < row_count; ++row) {
+                const size_t offset = static_cast<size_t>(row) * column_count;
+                for (uint32_t col = 0; col < column_count; ++col) {
+                    value_matrix_[col].float_data[row] = source[offset + col];
+                }
+            }
+            break;
+        }
+        case DOUBLE: {
+            const double* source = static_cast<const double*>(data);
+            for (uint32_t row = 0; row < row_count; ++row) {
+                const size_t offset = static_cast<size_t>(row) * column_count;
+                for (uint32_t col = 0; col < column_count; ++col) {
+                    value_matrix_[col].double_data[row] = source[offset + col];
+                }
+            }
+            break;
+        }
+        default:
+            return E_TYPE_NOT_SUPPORTED;
+    }
+
+    for (uint32_t col = 0; col < column_count; ++col) {
+        bitmaps_[col].clear_all();
+    }
+    cur_row_size_ = std::max(row_count, cur_row_size_);
+    return E_OK;
+}
+
 int Tablet::set_column_string_values(uint32_t schema_index,
                                      const int32_t* offsets, const char* data,
                                      const uint8_t* bitmap, uint32_t count) {

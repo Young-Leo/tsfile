@@ -409,13 +409,6 @@ ERRNO tsfile_writer_add_tsfile_property(TsFileWriter writer, const char* key,
     }
 }
 
-ERRNO tsfile_writer_flush(TsFileWriter writer) {
-    if (writer == nullptr) {
-        return common::E_INVALID_ARG;
-    }
-    return static_cast<storage::TsFileTableWriter*>(writer)->flush();
-}
-
 ERRNO tsfile_reader_close(TsFileReader reader) {
     auto* ts_reader = static_cast<storage::TsFileReader*>(reader);
     delete ts_reader;
@@ -509,6 +502,17 @@ ERRNO tablet_set_column_values(Tablet tablet, uint32_t column_index,
     }
     return static_cast<storage::Tablet*>(tablet)->set_column_values(
         column_index, values, null_bitmap, count);
+}
+
+ERRNO tablet_set_interleaved_values(Tablet tablet, const void* values,
+                                    TSDataType data_type, uint32_t row_count,
+                                    uint32_t column_count) {
+    if (tablet == nullptr || (values == nullptr && row_count != 0)) {
+        return common::E_INVALID_ARG;
+    }
+    return static_cast<storage::Tablet*>(tablet)->set_interleaved_values(
+        values, static_cast<common::TSDataType>(data_type), row_count,
+        column_count);
 }
 
 ERRNO tablet_add_timestamp(Tablet tablet, uint32_t row_index,

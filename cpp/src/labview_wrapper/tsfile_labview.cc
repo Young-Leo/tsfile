@@ -70,9 +70,6 @@ struct WriterCtx {
     std::vector<TSDataType> col_types;
     Tablet block_tablet = nullptr;
     uint32_t block_capacity = 0;
-    std::vector<int32_t> i32_scratch;
-    std::vector<float> f32_scratch;
-    std::vector<double> f64_scratch;
 };
 
 struct CloseTaskCtx {
@@ -168,17 +165,7 @@ LV_Status close_writer(WriterCtx* ctx) noexcept {
     return status;
 }
 
-std::vector<int32_t>& block_scratch(WriterCtx* ctx, const int32_t*) {
-    return ctx->i32_scratch;
-}
-
-std::vector<float>& block_scratch(WriterCtx* ctx, const float*) {
-    return ctx->f32_scratch;
-}
-
-std::vector<double>& block_scratch(WriterCtx* ctx, const double*) {
-    return ctx->f64_scratch;
-}
+enum class BlockLayout { kRowMajor, kColumnMajor };
 
 ERRNO ensure_block_tablet(WriterCtx* ctx, uint32_t rows, uint32_t cols) {
     if (ctx->block_tablet != nullptr && ctx->block_capacity >= rows) {
@@ -189,10 +176,11 @@ ERRNO ensure_block_tablet(WriterCtx* ctx, uint32_t rows, uint32_t cols) {
     for (uint32_t col = 0; col < cols; ++col) {
         names[col] = const_cast<char*>(ctx->col_names[col].c_str());
     }
+    ERRNO err = E_OK;
     Tablet replacement =
-        tablet_new(names.data(), ctx->col_types.data(), cols, rows);
+        tablet_new(names.data(), ctx->col_types.data(), cols, rows, &err);
     if (replacement == nullptr) {
-        return RET_OOM;
+        return err != E_OK ? err : RET_OOM;
     }
     if (ctx->block_tablet != nullptr) {
         free_tablet(&ctx->block_tablet);
@@ -204,7 +192,8 @@ ERRNO ensure_block_tablet(WriterCtx* ctx, uint32_t rows, uint32_t cols) {
 
 template <typename T>
 LV_Status write_block(LV_Handle writer, const int64_t* ts, const T* data,
-                      int32_t nrows, int32_t ncols, TSDataType expected_type) {
+                      int32_t nrows, int32_t ncols, TSDataType expected_type,
+                      BlockLayout layout) {
     auto* wctx = static_cast<WriterCtx*>(lookup(writer, Kind::kWriter));
     if (wctx == nullptr || wctx->writer == nullptr || ts == nullptr ||
         data == nullptr || nrows <= 0 || ncols <= 0 ||
@@ -243,18 +232,22 @@ LV_Status write_block(LV_Handle writer, const int64_t* ts, const T* data,
             return err;
         }
 
-        std::vector<T>& scratch = block_scratch(wctx, static_cast<T*>(nullptr));
-        scratch.resize(rows * cols);
-        for (size_t col = 0; col < cols; ++col) {
-            T* column = scratch.data() + col * rows;
-            for (size_t row = 0; row < rows; ++row) {
-                column[row] = data[row * cols + col];
-            }
-            err = tablet_set_column_values(
-                wctx->block_tablet, static_cast<uint32_t>(col), column, nullptr,
-                static_cast<uint32_t>(rows));
+        if (layout == BlockLayout::kRowMajor) {
+            err = tablet_set_interleaved_values(
+                wctx->block_tablet, data, expected_type,
+                static_cast<uint32_t>(rows), static_cast<uint32_t>(cols));
             if (err != E_OK) {
                 return err;
+            }
+        } else {
+            for (size_t col = 0; col < cols; ++col) {
+                const T* column = data + col * rows;
+                err = tablet_set_column_values(
+                    wctx->block_tablet, static_cast<uint32_t>(col), column,
+                    nullptr, static_cast<uint32_t>(rows));
+                if (err != E_OK) {
+                    return err;
+                }
             }
         }
 
@@ -381,19 +374,46 @@ LV_Status lv_tsfile_writer_write(LV_Handle writer, LV_Handle tablet) {
 LV_Status lv_tsfile_write_block_i32(LV_Handle writer, const int64_t* ts,
                                     const int32_t* data, int32_t nrows,
                                     int32_t ncols) {
-    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_INT32);
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_INT32,
+                       BlockLayout::kRowMajor);
 }
 
 LV_Status lv_tsfile_write_block_f32(LV_Handle writer, const int64_t* ts,
                                     const float* data, int32_t nrows,
                                     int32_t ncols) {
-    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_FLOAT);
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_FLOAT,
+                       BlockLayout::kRowMajor);
 }
 
 LV_Status lv_tsfile_write_block_f64(LV_Handle writer, const int64_t* ts,
                                     const double* data, int32_t nrows,
                                     int32_t ncols) {
-    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_DOUBLE);
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_DOUBLE,
+                       BlockLayout::kRowMajor);
+}
+
+LV_Status lv_tsfile_write_block_i32_column_major(LV_Handle writer,
+                                                 const int64_t* ts,
+                                                 const int32_t* data,
+                                                 int32_t nrows, int32_t ncols) {
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_INT32,
+                       BlockLayout::kColumnMajor);
+}
+
+LV_Status lv_tsfile_write_block_f32_column_major(LV_Handle writer,
+                                                 const int64_t* ts,
+                                                 const float* data,
+                                                 int32_t nrows, int32_t ncols) {
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_FLOAT,
+                       BlockLayout::kColumnMajor);
+}
+
+LV_Status lv_tsfile_write_block_f64_column_major(LV_Handle writer,
+                                                 const int64_t* ts,
+                                                 const double* data,
+                                                 int32_t nrows, int32_t ncols) {
+    return write_block(writer, ts, data, nrows, ncols, TS_DATATYPE_DOUBLE,
+                       BlockLayout::kColumnMajor);
 }
 
 LV_Status lv_tsfile_writer_flush(LV_Handle writer) {
@@ -507,10 +527,11 @@ LV_Status lv_tsfile_tablet_finalize_columns(LV_Handle tablet) {
     for (uint32_t i = 0; i < n; ++i) {
         names[i] = const_cast<char*>(ctx->col_names[i].c_str());
     }
+    ERRNO err = E_OK;
     ctx->tablet =
-        tablet_new(names.data(), ctx->col_types.data(), n, ctx->max_rows);
+        tablet_new(names.data(), ctx->col_types.data(), n, ctx->max_rows, &err);
     if (ctx->tablet == nullptr) {
-        return E_INVALID_ARG;
+        return err != E_OK ? err : E_INVALID_ARG;
     }
     ctx->finalized = true;
     return E_OK;

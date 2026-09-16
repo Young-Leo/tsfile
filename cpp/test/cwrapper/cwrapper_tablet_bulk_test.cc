@@ -44,7 +44,7 @@ TEST(CWrapperTabletBulkTest, CopiesTimestampsValuesAndNullBitmap) {
     ASSERT_NE(nullptr, writer);
     ASSERT_EQ(common::E_OK, err);
 
-    Tablet tablet = tablet_new(names, types, 2, 3);
+    Tablet tablet = tablet_new(names, types, 2, 3, &err);
     ASSERT_NE(nullptr, tablet);
     const int64_t timestamps[] = {10, 20, 30};
     const double values_a[] = {1.5, 2.5, 3.5};
@@ -98,7 +98,8 @@ TEST(CWrapperTabletBulkTest, RejectsInvalidArguments) {
     char name[] = "value";
     char* names[] = {name};
     TSDataType types[] = {TS_DATATYPE_DOUBLE};
-    Tablet tablet = tablet_new(names, types, 1, 2);
+    ERRNO err = common::E_OK;
+    Tablet tablet = tablet_new(names, types, 1, 2, &err);
     ASSERT_NE(nullptr, tablet);
     const int64_t timestamps[] = {1, 2, 3};
     const double values[] = {1.0, 2.0, 3.0};
@@ -117,6 +118,21 @@ TEST(CWrapperTabletBulkTest, RejectsInvalidArguments) {
               tablet_set_column_values(tablet, 1, values, nullptr, 2));
     EXPECT_EQ(common::E_OUT_OF_RANGE,
               tablet_set_column_values(tablet, 0, values, nullptr, 3));
+    EXPECT_EQ(common::E_INVALID_ARG,
+              tablet_set_interleaved_values(nullptr, values, TS_DATATYPE_DOUBLE,
+                                            2, 1));
+    EXPECT_EQ(common::E_INVALID_ARG,
+              tablet_set_interleaved_values(tablet, nullptr, TS_DATATYPE_DOUBLE,
+                                            1, 1));
+    EXPECT_EQ(common::E_INVALID_ARG,
+              tablet_set_interleaved_values(tablet, values, TS_DATATYPE_DOUBLE,
+                                            2, 0));
+    EXPECT_EQ(
+        common::E_TYPE_NOT_MATCH,
+        tablet_set_interleaved_values(tablet, values, TS_DATATYPE_FLOAT, 2, 1));
+    EXPECT_EQ(common::E_OK, tablet_set_interleaved_values(
+                                tablet, values, TS_DATATYPE_DOUBLE, 2, 1));
+    EXPECT_EQ(2u, tablet_get_cur_row_size(tablet));
     EXPECT_EQ(common::E_OUT_OF_RANGE, tablet_reset(tablet, 3));
 
     free_tablet(&tablet);

@@ -58,7 +58,7 @@ LabVIEW 使用 x64 DLL。`LV_Handle` 即使在 32 位 LabVIEW 中也配置为 U6
 3. 每列调用 `lv_tsfile_schema_builder_add_column`。
 4. `lv_tsfile_writer_open` 获取 Writer U64 Handle。
 5. 释放 Schema Builder。
-6. 每个采集块调用匹配类型的 `lv_tsfile_write_block_*`。
+6. 每个采集块调用与数据布局、类型匹配的 `lv_tsfile_write_block_*`。
 7. 可在受控时机调用 `lv_tsfile_writer_flush`；它同步执行且 Writer 仍可继续写。
 8. 文件轮转或停止时选择同步 `lv_tsfile_writer_close`，或使用下一节的两阶段
    异步关闭；随后把本地 Writer Handle 置零。
@@ -77,9 +77,29 @@ data[row * ncols + column]
 ```
 
 例如 3 行、2 通道的扁平数组为
-`[r0c0, r0c1, r1c0, r1c1, r2c0, r2c1]`。Wrapper 内部把它拆分为列数据，
-缓存 Tablet 和暂存区；相同或更小的后续批次不会重新创建 Tablet，只有更大
-批次才扩容。建议从每批 1,000～10,000 行开始，用真实采样数据调优。
+`[r0c0, r0c1, r1c0, r1c1, r2c0, r2c1]`。
+
+如果采集端本来就持有“每通道一段连续数组”，可改用列主序入口：
+
+```c
+lv_tsfile_write_block_f64_column_major(writer, ts, data, nrows, ncols);
+```
+
+其布局为：
+
+```text
+data[column * nrows + row]
+```
+
+上例对应 `[c0r0, c0r1, c0r2, c1r0, c1r1, c1r2]`。`INT32`、`FLOAT`、
+`DOUBLE` 分别有 `_i32_column_major`、`_f32_column_major`、
+`_f64_column_major` 入口，CLFN 参数类型与原行主序函数相同。
+
+Wrapper 会缓存并复用 Tablet；相同或更小的后续批次不会重新创建 Tablet，只有
+更大批次才扩容。行主序入口在一次融合循环中直接写入 Tablet 列缓冲区，列主序
+入口则对每列做一次连续复制，两者都不再分配整块转置暂存区。应按采集端原生布局
+选择入口，不要为了调用列主序接口而在 LabVIEW 侧额外转置。建议从每批
+1,000～10,000 行开始，用真实采样数据调优。
 
 ## 4. 单线程异步关闭
 

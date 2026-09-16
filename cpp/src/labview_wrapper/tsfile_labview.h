@@ -95,6 +95,24 @@ LV_API LV_Status lv_tsfile_write_block_f32(LV_Handle writer, const int64_t* ts,
 LV_API LV_Status lv_tsfile_write_block_f64(LV_Handle writer, const int64_t* ts,
                                            const double* data, int32_t nrows,
                                            int32_t ncols);
+/* Channel-contiguous variant. data has nrows*ncols elements in column-major
+ * order: data[col*nrows + row]. This avoids row-to-column transposition when
+ * the LabVIEW producer already supplies one contiguous array per channel. */
+LV_API LV_Status lv_tsfile_write_block_i32_column_major(LV_Handle writer,
+                                                        const int64_t* ts,
+                                                        const int32_t* data,
+                                                        int32_t nrows,
+                                                        int32_t ncols);
+LV_API LV_Status lv_tsfile_write_block_f32_column_major(LV_Handle writer,
+                                                        const int64_t* ts,
+                                                        const float* data,
+                                                        int32_t nrows,
+                                                        int32_t ncols);
+LV_API LV_Status lv_tsfile_write_block_f64_column_major(LV_Handle writer,
+                                                        const int64_t* ts,
+                                                        const double* data,
+                                                        int32_t nrows,
+                                                        int32_t ncols);
 /* Synchronously flush buffered chunks. The writer remains open. */
 LV_API LV_Status lv_tsfile_writer_flush(LV_Handle writer);
 /* Close the writer synchronously when async_close is 0. When async_close is

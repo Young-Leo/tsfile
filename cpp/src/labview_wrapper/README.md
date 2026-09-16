@@ -29,8 +29,9 @@ Library Function Node (CLFN).
   `lv_tsfile_write_file_f64`. It creates the schema, opens the file, writes one
   block, and closes the file in one CLFN call.
 - Continuous acquisition: open one writer, call
-  `lv_tsfile_write_block_f64` once per acquisition block, and close the writer
-  when the file rolls over.
+  `lv_tsfile_write_block_f64` for interleaved samples, or
+  `lv_tsfile_write_block_f64_column_major` for channel-contiguous samples,
+  once per acquisition block, and close the writer when the file rolls over.
 - Homogeneous numeric reads: create a batch result set with
   `lv_tsfile_query_table_batch`, then call the matching
   `lv_tsfile_rs_read_block_i32/f32/f64` function until it returns zero rows.
@@ -54,6 +55,19 @@ For a 9-channel LabVIEW acquisition, reshape the 2D buffer to a 1D array whose
 first nine elements are the nine channels at the first timestamp. Configure
 both array arguments as **Array Data Pointer**. Do not pass a LabVIEW array
 handle or a pointer to a handle.
+
+If the producer already has one contiguous array per channel, concatenate the
+channels and call the matching `_column_major` function instead:
+
+```text
+data[column * nrows + row]
+```
+
+For example, two three-sample channels become
+`[ch0_t0, ch0_t1, ch0_t2, ch1_t0, ch1_t1, ch1_t2]`. The column-major entry
+points are available for `i32`, `f32`, and `f64`. Do not transpose a native
+interleaved acquisition buffer merely to call this variant; use the layout the
+producer already owns so the host does not add another full-buffer copy.
 
 ## Minimal one-call CLFN configuration
 
@@ -85,17 +99,21 @@ The streaming sequence is:
 1. Create a schema builder and add all columns.
 2. Call `lv_tsfile_writer_open` once. Configure `out_writer` as a U64 Pointer
    to Value.
-3. Call `lv_tsfile_write_block_f64` for each block. Configure `writer` as U64
-   by value, `ts` as 1D I64 Array Data Pointer, and `data` as 1D DBL Array Data
-   Pointer.
+3. Call `lv_tsfile_write_block_f64` for a row-major/interleaved block, or
+   `lv_tsfile_write_block_f64_column_major` for a channel-contiguous block.
+   Configure `writer` as U64 by value, `ts` as 1D I64 Array Data Pointer, and
+   `data` as 1D DBL Array Data Pointer.
 4. Optionally call `lv_tsfile_writer_flush` at a controlled point. It is
    synchronous and leaves the writer open.
 5. Close the file with either `lv_tsfile_writer_close` or the optional
    two-phase API described below.
 
-The writer caches and reuses its internal tablet and typed deinterleave buffer;
-only a larger batch grows them. The caller retains ownership of both input
-arrays, and the wrapper never stores their addresses after the call returns.
+The writer caches and reuses its internal Tablet; only a larger batch grows it.
+The row-major path copies values directly into the Tablet's column buffers in
+one fused pass. The column-major path performs one contiguous copy per column.
+Neither path creates the old full-size transpose scratch buffer. The caller
+retains ownership of both input arrays, and the wrapper never stores their
+addresses after the call returns.
 
 ## Optional asynchronous close
 

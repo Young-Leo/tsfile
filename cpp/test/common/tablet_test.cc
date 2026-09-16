@@ -110,6 +110,43 @@ TEST(TabletTest, SetColumnValuesBitmapPreservesNullFlag) {
     EXPECT_EQ(tablet.get_value(7, 0u, ty), nullptr);
 }
 
+TEST(TabletTest, SetInterleavedValuesCopiesDirectlyIntoColumns) {
+    std::vector<MeasurementSchema> schema_vec;
+    schema_vec.push_back(MeasurementSchema(
+        "x", common::TSDataType::DOUBLE, common::TSEncoding::PLAIN,
+        common::CompressionType::UNCOMPRESSED));
+    schema_vec.push_back(MeasurementSchema(
+        "y", common::TSDataType::DOUBLE, common::TSEncoding::PLAIN,
+        common::CompressionType::UNCOMPRESSED));
+    Tablet tablet("dev",
+                  std::make_shared<std::vector<MeasurementSchema>>(schema_vec));
+
+    const double values[] = {1.0, 10.0, 2.0, 20.0, 3.0, 30.0};
+    ASSERT_EQ(tablet.set_interleaved_values(values, common::TSDataType::DOUBLE,
+                                            3u, 2u),
+              common::E_OK);
+    EXPECT_EQ(tablet.get_cur_row_size(), 3u);
+
+    common::TSDataType type;
+    for (uint32_t row = 0; row < 3; ++row) {
+        const double* x =
+            static_cast<const double*>(tablet.get_value(row, 0u, type));
+        ASSERT_NE(x, nullptr);
+        EXPECT_DOUBLE_EQ(*x, values[row * 2]);
+        const double* y =
+            static_cast<const double*>(tablet.get_value(row, 1u, type));
+        ASSERT_NE(y, nullptr);
+        EXPECT_DOUBLE_EQ(*y, values[row * 2 + 1]);
+    }
+
+    EXPECT_EQ(tablet.set_interleaved_values(values, common::TSDataType::DOUBLE,
+                                            3u, 1u),
+              common::E_INVALID_ARG);
+    EXPECT_EQ(tablet.set_interleaved_values(values, common::TSDataType::FLOAT,
+                                            3u, 2u),
+              common::E_TYPE_NOT_MATCH);
+}
+
 // Regression: set_column_string_values / set_column_string_repeated used to
 // reinterpret value_matrix_[c].string_col without checking the schema type.
 // Calling them on a numeric column would corrupt that column's numeric

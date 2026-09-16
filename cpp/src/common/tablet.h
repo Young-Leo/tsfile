@@ -320,6 +320,12 @@ class Tablet {
     int set_column_values(uint32_t schema_index, const void* data,
                           const uint8_t* bitmap, uint32_t count);
 
+    // Bulk copy a homogeneous fixed-width row-major matrix into the
+    // Tablet's column buffers. The input element at (row, column) is
+    // data[row * column_count + column]. All values are marked non-null.
+    int set_interleaved_values(const void* data, common::TSDataType data_type,
+                               uint32_t row_count, uint32_t column_count);
+
     // Bulk copy a STRING column from Arrow-style offsets + flat data buffer.
     // bitmap=nullptr means all non-null; same convention as set_column_values.
     int set_column_string_values(uint32_t schema_index, const int32_t* offsets,
