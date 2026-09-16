@@ -42,7 +42,7 @@ namespace storage {
 
 class ChunkWriter {
    public:
-    static const int32_t PAGES_DATA_PAGE_SIZE = 1024;
+    static const int32_t PAGES_DATA_PAGE_SIZE = 64 * 1024;
 
    public:
     ChunkWriter()

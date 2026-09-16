@@ -244,26 +244,28 @@ int TsFileIOWriter::start_flush_chunk(common::ByteStream& chunk_data,
 
 int TsFileIOWriter::flush_chunk(ByteStream& chunk_data) {
     int ret = E_OK;
-    if (RET_FAIL(write_chunk_data(chunk_data))) {
-        // log_err("writer chunk data error, ret=%d", ret);
-    } else if (RET_FAIL(flush_stream_to_file())) {
-        // log_err("flush stream error, ret=%d", ret);
+    // The chunk header is already in write_stream_. Flush that small prefix,
+    // then write the encoded chunk pages directly. The old path copied the
+    // entire chunk into write_stream_ and immediately copied it again to the
+    // OS, adding a full-file memory pass for every flush.
+    if (RET_FAIL(flush_stream_to_file())) {
+        return ret;
     }
-    return ret;
-}
 
-int TsFileIOWriter::write_chunk_data(ByteStream& chunk_data) {
-    OFFSET_DEBUG("before writer chunk data");
-    // may print chunk_data here for debug.
-#if DEBUG_SE
-    DEBUG_print_byte_stream("WriteChunkData chunk_data=", chunk_data);
-    std::cout << "WriteChunkData: write_stream_.total_size="
-              << write_stream_.total_size()
-              << ", chunk_data.total_size=" << chunk_data.total_size()
-              << std::endl;
-#endif
-    int ret = merge_byte_stream(write_stream_, chunk_data, true);
-    OFFSET_DEBUG("before writer chunk data");
+    ByteStream::BufferIterator iter = chunk_data.init_buffer_iterator();
+    while (IS_SUCC(ret)) {
+        ByteStream::Buffer buffer = iter.get_next_buf();
+        if (buffer.buf_ == nullptr) {
+            break;
+        }
+        if (buffer.len_ > 0 &&
+            RET_FAIL(file_->write(buffer.buf_, buffer.len_))) {
+            break;
+        }
+    }
+    if (IS_SUCC(ret)) {
+        file_base_offset_ = file_->get_position();
+    }
     return ret;
 }
 

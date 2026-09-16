@@ -169,23 +169,22 @@ class ValuePageWriter {
         // when only a prefix made it into value_out_stream_ — a subsequent
         // re-encode would interleave with the stale stream and produce a
         // misaligned page on disk.
-        uint32_t valid_count = 0;
-        for (uint32_t i = 0; i < count; i++) {
-            uint32_t row = start_idx + i;
-            // bit=1 in tablet bitmap means null; bit=0 means not null
-            if (!const_cast<common::BitMap&>(col_notnull_bitmap).test(row)) {
-                valid_count++;
+        uint32_t valid_count = count;
+        if (col_notnull_bitmap.may_have_set_bits()) {
+            valid_count = 0;
+            for (uint32_t i = 0; i < count; i++) {
+                uint32_t row = start_idx + i;
+                // bit=1 in tablet bitmap means null; bit=0 means not null
+                if (!const_cast<common::BitMap&>(col_notnull_bitmap)
+                         .test(row)) {
+                    valid_count++;
+                }
             }
         }
 
         if (valid_count == 0) {
             // Still need to advance size_ so trailing null rows are tracked.
-            for (uint32_t i = 0; i < count; i++) {
-                if ((size_ / 8) + 1 > col_notnull_bitmap_.size()) {
-                    col_notnull_bitmap_.push_back(0);
-                }
-                size_++;
-            }
+            append_bitmap_run(false, count);
             return ret;
         }
 
@@ -198,6 +197,8 @@ class ValuePageWriter {
             }
             statistic_->update_batch(timestamps + start_idx, values + start_idx,
                                      count);
+            append_bitmap_run(true, count);
+            return ret;
         } else {
             // Encode only non-null values one by one
             for (uint32_t i = 0; i < count; i++) {
@@ -357,13 +358,37 @@ class ValuePageWriter {
     void destroy_page_data() { cur_page_data_.destroy(); }
 
    private:
+    FORCE_INLINE void append_bitmap_run(bool non_null, uint32_t count) {
+        if (count == 0) return;
+        const uint64_t end64 = static_cast<uint64_t>(size_) + count;
+        ASSERT(end64 <= UINT32_MAX);
+        const uint32_t end = static_cast<uint32_t>(end64);
+        col_notnull_bitmap_.resize((end + 7) / 8, 0);
+        if (non_null) {
+            uint32_t current = size_;
+            while (current < end && current % 8 != 0) {
+                col_notnull_bitmap_[current / 8] |= (MASK >> (current % 8));
+                ++current;
+            }
+            while (current + 8 <= end) {
+                col_notnull_bitmap_[current / 8] = 0xFF;
+                current += 8;
+            }
+            while (current < end) {
+                col_notnull_bitmap_[current / 8] |= (MASK >> (current % 8));
+                ++current;
+            }
+        }
+        size_ = end;
+    }
+
     FORCE_INLINE int prepare_end_page() {
         int ret = common::E_OK;
         if (RET_FAIL(value_encoder_->flush(value_out_stream_))) {
-        }
-        for (auto col_notnull_bitmap_byte : col_notnull_bitmap_) {
-            col_notnull_bitmap_out_stream_.write_buf(&col_notnull_bitmap_byte,
-                                                     1);
+        } else if (!col_notnull_bitmap_.empty() &&
+                   RET_FAIL(col_notnull_bitmap_out_stream_.write_buf(
+                       col_notnull_bitmap_.data(),
+                       static_cast<uint32_t>(col_notnull_bitmap_.size())))) {
         }
         return ret;
     }

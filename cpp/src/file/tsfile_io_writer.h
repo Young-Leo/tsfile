@@ -120,7 +120,6 @@ class TsFileIOWriter {
     FORCE_INLINE int sync_file() { return file_->sync(); }
     FORCE_INLINE int close_file() { return file_->close(); }
     int flush_stream_to_file();
-    int write_chunk_data(common::ByteStream& chunk_data);
     FORCE_INLINE int64_t cur_file_position() const {
         return file_base_offset_ + write_stream_.total_size();
     }
