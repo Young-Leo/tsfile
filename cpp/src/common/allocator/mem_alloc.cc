@@ -25,6 +25,7 @@
 #include <atomic>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 
 #include "alloc_base.h"
 #include "common/logger/elog.h"
@@ -95,6 +96,9 @@ void* mem_alloc(uint32_t size, AllocModID mid) {
     static_assert(HEADER_PTR_SIZE <= ALIGNMENT,
                   "Header must fit within alignment");
     constexpr size_t header_size = ALIGNMENT;
+    if (size > std::numeric_limits<size_t>::max() - header_size) {
+        return nullptr;
+    }
     const size_t total_size = size + header_size;
     auto raw = static_cast<char*>(malloc(total_size));
     if (UNLIKELY(raw == nullptr)) {
@@ -150,6 +154,9 @@ void mem_free(void* ptr) {
 }
 
 void* mem_realloc(void* ptr, uint32_t size) {
+    if (size > std::numeric_limits<size_t>::max() - ALIGNMENT) {
+        return nullptr;
+    }
 #ifdef ENABLE_TEST
     if (g_fail_next_mem_realloc.exchange(false, std::memory_order_acq_rel)) {
         return nullptr;

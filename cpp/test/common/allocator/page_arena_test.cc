@@ -20,6 +20,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+#include <limits>
+
 namespace common {
 
 TEST(PageArenaTest, PageArenaInit) {
@@ -53,6 +56,40 @@ TEST(PageArenaTest, AllocMoreThanPageSize) {
     void* ptr = page_arena.alloc(page_size * 2);
     ASSERT_NE(ptr, nullptr);
     page_arena.reset();
+}
+
+TEST(PageArenaTest, ZeroSizeAndFullPageStayAligned) {
+    PageArena uninitialized;
+    void* zero = uninitialized.alloc(0);
+    ASSERT_NE(zero, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(zero) % alignof(std::max_align_t),
+              0u);
+
+    PageArena arena;
+    arena.init(1024, MOD_DEFAULT);
+    for (uint32_t size : {0u, 1024u, 1025u, 2048u}) {
+        void* ptr = arena.alloc(size);
+        ASSERT_NE(ptr, nullptr);
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr) % alignof(std::max_align_t),
+                  0u);
+        if (size > 0) {
+            std::memset(ptr, 0x5a, size);
+        }
+    }
+    EXPECT_GE(arena.get_total_used_bytes(), 1024 + 1025 + 2048);
+    EXPECT_EQ(arena.alloc(std::numeric_limits<uint32_t>::max()), nullptr);
+}
+
+TEST(PageArenaTest, AllocationHeaderCannotOverflowSizeT) {
+    if (sizeof(size_t) != sizeof(uint32_t)) return;
+    const uint32_t too_large = std::numeric_limits<uint32_t>::max();
+    EXPECT_EQ(mem_alloc(too_large, MOD_DEFAULT), nullptr);
+    char* original = static_cast<char*>(mem_alloc(16, MOD_DEFAULT));
+    ASSERT_NE(original, nullptr);
+    original[0] = 'x';
+    EXPECT_EQ(mem_realloc(original, too_large), nullptr);
+    EXPECT_EQ(original[0], 'x');
+    mem_free(original);
 }
 
 struct MyStruct {

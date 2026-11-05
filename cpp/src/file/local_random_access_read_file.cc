@@ -105,19 +105,20 @@ int LocalRandomAccessReadFile::get_file_generation_from_descriptor(
     if (handle_value == -1) {
         return E_FILE_READ_ERR;
     }
-    FILE_BASIC_INFO info;
-    if (!GetFileInformationByHandleEx(reinterpret_cast<HANDLE>(handle_value),
-                                      FileBasicInfo, &info, sizeof(info))) {
+    // Available in older MinGW SDKs too; both APIs report the same FILETIME
+    // last-write value. Read the size from the same descriptor snapshot.
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(reinterpret_cast<HANDLE>(handle_value),
+                                    &info)) {
         return E_FILE_READ_ERR;
     }
     static const int64_t WINDOWS_TO_UNIX_100NS = 116444736000000000LL;
-    mtime_ns = (info.LastWriteTime.QuadPart - WINDOWS_TO_UNIX_100NS) * 100;
-    LARGE_INTEGER current_size;
-    if (!GetFileSizeEx(reinterpret_cast<HANDLE>(handle_value), &current_size) ||
-        current_size.QuadPart < 0) {
-        return E_FILE_READ_ERR;
-    }
-    size = static_cast<uint64_t>(current_size.QuadPart);
+    const uint64_t last_write =
+        (static_cast<uint64_t>(info.ftLastWriteTime.dwHighDateTime) << 32) |
+        info.ftLastWriteTime.dwLowDateTime;
+    mtime_ns = (static_cast<int64_t>(last_write) - WINDOWS_TO_UNIX_100NS) * 100;
+    size =
+        (static_cast<uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
 #else
     struct stat info;
     if (::fstat(fd_, &info) != 0 || info.st_size < 0) {

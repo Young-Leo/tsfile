@@ -18,6 +18,8 @@
  */
 #include "page_arena.h"
 
+#include <algorithm>
+#include <limits>
 #include <new>
 
 namespace common {
@@ -31,24 +33,24 @@ char* PageArena::alloc(uint32_t size) {
                 return ret_ptr;
             }
         }
-
-        /*
-         * cur_page is null OR can not alloc @size from cur_page,
-         * then alloc new page
-         */
-        void* ptr = base_allocator_.alloc(page_size_ + sizeof(Page), mid_);
-        if (UNLIKELY(ptr == nullptr)) {
-            return nullptr;
-        }
-        Page* new_page = new (ptr) Page(page_size_, cur_page);
-        dummy_head_.next_ = new_page;
-        return new_page->alloc(size);
-    } else {
-        void* ptr = base_allocator_.alloc(size + sizeof(Page), mid_);
-        Page* new_page = new (ptr) Page(dummy_head_.next_);
-        dummy_head_.next_ = new_page;
-        return reinterpret_cast<char*>(new_page) + sizeof(Page);
     }
+
+    // Page's header is 12 bytes on i686. Its payload may need padding to
+    // alignof(max_align_t), even when size is zero or exactly page_size_.
+    // Reserve that padding before checking the payload against page_end_.
+    const uint32_t padding = alignof(std::max_align_t) - 1;
+    const uint32_t overhead = sizeof(Page) + padding;
+    const uint32_t payload = std::max(size, page_size_);
+    if (payload > std::numeric_limits<uint32_t>::max() - overhead) {
+        return nullptr;
+    }
+    void* ptr = base_allocator_.alloc(payload + overhead, mid_);
+    if (UNLIKELY(ptr == nullptr)) {
+        return nullptr;
+    }
+    Page* new_page = new (ptr) Page(payload + padding, dummy_head_.next_);
+    dummy_head_.next_ = new_page;
+    return new_page->alloc(size);
 }
 
 void PageArena::reset() {
