@@ -38,6 +38,12 @@ install(TARGETS tsfile_labview
         RUNTIME DESTINATION ${LIBRARY_OUTPUT_PATH})
 install(FILES tsfile_labview.h DESTINATION include)
 
+option(BUILD_LABVIEW_ISOLATED_BENCHMARK
+       "Build the portable nine-channel LabVIEW simulation benchmark" OFF)
+if (BUILD_LABVIEW_ISOLATED_BENCHMARK)
+    add_subdirectory(benchmark)
+endif ()
+
 option(BUILD_LABVIEW_WRAPPER_TESTS "Build LabVIEW shim standalone tests"
        ${BUILD_TEST})
 if (BUILD_LABVIEW_WRAPPER_TESTS)

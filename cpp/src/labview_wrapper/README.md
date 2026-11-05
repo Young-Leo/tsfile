@@ -23,6 +23,12 @@ This directory provides a small C ABI over the TsFile C++ library. It avoids
 passing C++ objects or pointer-containing structs through a LabVIEW Call
 Library Function Node (CLFN).
 
+For a nine-channel simulation without acquisition hardware, see
+[benchmark/README.md](benchmark/README.md). It contains the portable
+`libtsfile_isol_vi` benchmark source, an editable LabVIEW VI, and Windows/Linux
+build and readback commands. This optional target is separate from the
+acquisition API described below.
+
 ## Which API to use
 
 - One file, one homogeneous DOUBLE array: call
